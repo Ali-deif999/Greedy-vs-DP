@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Greedy vs. DP: Resource Allocation & Pathfinding</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700&display=swap');
+        
+        body { font-family: 'Inter', sans-serif; }
+
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 4px;
+            width: 100%;
+            max-width: 350px; 
+            margin: 0 auto;
+            background-color: #e5e7eb;
+            padding: 4px;
+            border-radius: 0.75rem;
+        }
+
+        .cell {
+            aspect-ratio: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            border-radius: 0.5rem;
+            font-weight: bold;
+            font-size: 1.1rem;
+            position: relative;
+            /* Smoother transitions for background colors */
+            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            
+            /* STABILITY: Always have a 2px border space reserved to prevent layout shifts */
+            border: 2px solid transparent; 
+            box-sizing: border-box;
+            
+            /* Critical for z-index animations to work without clipping */
+            z-index: 1; 
+        }
+
+        .cell-sub {
+            font-size: 0.65rem;
+            font-weight: normal;
+            opacity: 0; /* Start invisible for fade-in */
+            margin-top: 2px;
+            /* STABILITY: Reserve space for text */
+            height: 12px; 
+            line-height: 12px;
+            transition: opacity 0.4s ease-out;
+        }
+        
+        .cell-sub.show {
+            opacity: 0.9;
+        }
+
+        /* --- Animations Definitions --- */
+        
+        /* Springy entry for the drone */
+        @keyframes drone-land {
+            0% { transform: scale(0.8); opacity: 0.7; }
+            60% { transform: scale(1.1); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        /* Subtle pulse for comparison candidates */
+        @keyframes compare-pulse {
+            0% { box-shadow: inset 0 0 0 0px rgba(245, 158, 11, 0.3); }
+            50% { box-shadow: inset 0 0 0 4px rgba(245, 158, 11, 0.6); }
+            100% { box-shadow: inset 0 0 0 0px rgba(245, 158, 11, 0.3); }
+        }
+
+        /* Attention flash when scanning */
+        @keyframes scan-flash {
+            0% { border-color: #93c5fd; background-color: #eff6ff; }
+            50% { border-color: #3b82f6; background-color: #dbeafe; }
+            100% { border-color: #93c5fd; background-color: #eff6ff; }
+        }
+
+        /* Satisfying confirmation pop for path */
+        @keyframes path-pop {
+            0% { transform: scale(1); }
+            50% { transform: scale(0.95); } /* Slight press */
+            100% { transform: scale(1); }
+        }
+
+        /* --- Algorithm States --- */
+
+        /* Active Drone (Current Position) */
+        .drone-greedy { 
+            border-color: #ef4444; 
+            background-color: #fff1f2;
+            box-shadow: inset 0 0 0 2px #ef4444; 
+            z-index: 20; /* Bring to top */
+            animation: drone-land 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); /* Bouncy spring */
+        }
+
+        .drone-dp { 
+            border-color: #3b82f6; 
+            background-color: #eff6ff;
+            box-shadow: inset 0 0 0 2px #3b82f6; 
+            z-index: 20; /* Bring to top */
+            animation: drone-land 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); /* Bouncy spring */
+        }
+        
+        /* Final Paths */
+        .path-greedy { 
+            background-color: #fecaca !important; 
+            color: #b91c1c; 
+            border-color: #ef4444;
+            animation: path-pop 0.3s ease-out;
+        }
+        
+        .path-dp { 
+            background-color: #bfdbfe !important; 
+            color: #1e40af; 
+            border-color: #3b82f6; 
+            animation: path-pop 0.3s ease-out;
+        }
+        
+        /* Scanning / Calculating */
+        .scanning { 
+            animation: scan-flash 1s infinite; 
+            border-style: dashed;
+            z-index: 10;
+        }
+        
+        /* Neighbor Comparison Highlight (Yellow/Amber) */
+        .comparing {
+            border-color: #f59e0b; /* Amber-500 */
+            border-style: solid;
+            background-color: #fffbeb; /* Amber-50 */
+            color: #d97706;
+            animation: compare-pulse 1s infinite;
+            z-index: 15;
+        }
+        
+        /* Dependency Source (Purple) */
+        .dependency { 
+            border-color: #8b5cf6; 
+            border-style: dashed;
+            background-color: #ede9fe; 
+            opacity: 0.9; 
+        }
+
+        /* Heatmap Colors */
+        .traffic-low { background-color: #d1fae5; color: #065f46; } 
+        .traffic-med { background-color: #fef3c7; color: #92400e; } 
+        .traffic-high { background-color: #fee2e2; color: #991b1b; } 
+        .traffic-jam { background-color: #fca5a5; color: #7f1d1d; } 
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen text-gray-800">
+
+    <!-- Header -->
+    <header class="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-20">
+        <div class="max-w-7xl mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center">
+            <div class="flex items-center space-x-3 mb-4 md:mb-0">
+                <div class="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center text-white text-xl">
+                    <i class="fas fa-route"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold text-gray-900">Resource Allocation & Pathfinding</h1>
+                    <p class="text-xs text-gray-500">Analysis: Time Complexity & Optimization</p>
+                </div>
+            </div>
+            
+            <div class="flex flex-wrap justify-center space-x-3 space-y-2 md:space-y-0">
+                <button onclick="window.generateRandomGrid(); window.resetSim('all');" id="btn-randomize" class="px-4 py-2 bg-green-500 text-white font-semibold rounded-lg hover:bg-green-600 transition shadow-md flex items-center space-x-2">
+                    <i class="fas fa-random"></i> <span>Random Matrix</span>
+                </button>
+                <button onclick="window.runComparison()" id="btn-compare" class="px-4 py-2 bg-green-500 text-white font-semibold rounded-lg hover:bg-green-700 transition shadow-md flex items-center space-x-2">
+                    <i class="fas fa-arrows-alt-h"></i> <span>Run Comparison</span>
+                </button>
+                <button onclick="window.resetSim('all')" class="px-4 py-2 bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300 transition">
+                    <i class="fas fa-undo"></i> <span>Reset</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
+        
+        <!-- Left & Center: Visualization Comparison -->
+        <div class="space-y-6 lg:col-span-2">
+            
+            <!-- Comparison Container -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Greedy Visualization -->
+                <div class="bg-white rounded-2xl shadow-lg p-4 border border-gray-100 h-full flex flex-col">
+                    <div class="flex justify-between items-start mb-4 border-b pb-2 border-red-100">
+                        <div>
+                            <h3 class="text-md font-bold text-red-600 flex items-center">
+                                <i class="fas fa-bolt mr-2"></i> Greedy Agent
+                            </h3>
+                            <span class="text-xs text-gray-400 font-mono">Complexity: O(N)</span>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-2xl font-bold text-red-600" id="total-score-greedy">0 <span class="text-xs font-normal text-gray-500">units</span></div>
+                            <div class="text-xs text-gray-500 mt-1">
+                                Ops: <span id="ops-greedy" class="font-mono font-bold text-gray-800">0</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="greedy-grid" class="grid-container flex-grow"></div>
+                    <div class="mt-2 text-xs text-center text-gray-400 italic">"Local Optimum Choice"</div>
+                </div>
+
+                <!-- DP Visualization -->
+                <div class="bg-white rounded-2xl shadow-lg p-4 border border-gray-100 h-full flex flex-col">
+                    <div class="flex justify-between items-start mb-4 border-b pb-2 border-blue-100">
+                        <div>
+                            <h3 class="text-md font-bold text-blue-600 flex items-center">
+                                <i class="fas fa-brain mr-2"></i> DP Agent (Tabulation)
+                            </h3>
+                            <span class="text-xs text-gray-400 font-mono">Complexity: O(N²)</span>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-2xl font-bold text-blue-600" id="total-score-dp">0 <span class="text-xs font-normal text-gray-500">units</span></div>
+                             <div class="text-xs text-gray-500 mt-1">
+                                Ops: <span id="ops-dp" class="font-mono font-bold text-gray-800">0</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="dp-grid" class="grid-container flex-grow"></div>
+                    <div class="mt-2 text-xs text-center text-gray-400 italic">"Global Optimum Guarantee"</div>
+                </div>
+            </div>
+            
+            <!-- Live Analysis Dashboard -->
+            <div class="bg-gray-900 text-white rounded-xl p-4 shadow-inner min-h-[160px] flex flex-col justify-center" id="analysis-panel">
+                <!-- Default State -->
+                <div id="analysis-default" class="text-center text-gray-400">
+                    <i class="fas fa-microchip text-2xl mb-2"></i>
+                    <p class="text-sm font-mono">Waiting for initialization...</p>
+                    <p class="text-xs text-gray-500 mt-1">Click 'Run Comparison' to begin.</p>
+                </div>
+
+                <!-- Active State (Hidden by default) -->
+                <div id="analysis-content" class="hidden space-y-3 font-mono text-sm w-full">
+                    <div class="flex justify-between items-center border-b border-gray-700 pb-2">
+                        <div>
+                            <span class="text-gray-500 uppercase text-[10px] tracking-wider block">Running Algorithm</span>
+                            <div id="analysis-algo" class="font-bold text-lg text-blue-400">DP Agent</div>
+                        </div>
+                        <div class="text-right">
+                             <span class="text-gray-500 uppercase text-[10px] tracking-wider block">Phase</span>
+                            <div id="analysis-phase" class="text-xs text-yellow-400 font-bold">Tabulation</div>
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="bg-gray-800 p-2 rounded border border-gray-700">
+                            <span class="text-gray-500 uppercase text-[10px] block mb-1">Active Cell</span>
+                            <div id="analysis-focus" class="text-white font-bold">Cell [1, 2]</div>
+                        </div>
+                        <div class="bg-gray-800 p-2 rounded border border-gray-700">
+                            <span class="text-gray-500 uppercase text-[10px] block mb-1">Current Action</span>
+                            <div id="analysis-action" class="text-gray-300">Comparing Neighbors</div>
+                        </div>
+                    </div>
+
+                    <div class="bg-gray-800 p-2 rounded mt-2 border-l-4" id="analysis-math-container">
+                        <span class="text-gray-500 uppercase text-[10px] block mb-1">Computational Logic</span>
+                        <div id="analysis-math" class="text-green-400 font-bold whitespace-nowrap overflow-x-auto">
+                            Cost = 5 + min(10, 15) = 15
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right: Explanation & Legend -->
+        <div class="space-y-6 lg:col-span-1">
+            
+            <!-- Legend / Details -->
+            <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+                <h3 class="font-bold text-gray-800 mb-4">Visual Legend</h3>
+                <div class="space-y-4">
+                    <div>
+                        <h4 class="text-sm font-semibold text-gray-900">Cost (Delay Units)</h4>
+                        <div class="flex flex-wrap justify-between mt-2 text-xs text-gray-500">
+                            <div class="flex items-center mr-2"><div class="w-3 h-3 bg-green-100 rounded mr-1"></div> Low (1-5)</div>
+                            <div class="flex items-center mr-2"><div class="w-3 h-3 bg-yellow-100 rounded mr-1"></div> Med (6-15)</div>
+                            <div class="flex items-center mr-2"><div class="w-3 h-3 bg-red-100 rounded mr-1"></div> High (16-25)</div>
+                            <div class="flex items-center"><div class="w-3 h-3 bg-red-300 rounded mr-1"></div> Crit (>25)</div>
+                        </div>
+                    </div>
+                     <div>
+                        <h4 class="text-sm font-semibold text-gray-900 mt-3">Indicators</h4>
+                        <div class="flex flex-col mt-2 text-xs text-gray-500 space-y-1">
+                            <div class="flex items-center"><div class="w-4 h-4 border-2 border-amber-500 bg-amber-100 mr-2"></div> Candidate (Comparing)</div>
+                            <div class="flex items-center"><div class="w-4 h-4 border-2 border-purple-500 border-dashed bg-purple-100 mr-2"></div> Dependency (DP Source)</div>
+                            <div class="flex items-center"><div class="w-4 h-4 border-2 border-blue-500 border-dashed mr-2"></div> Scanner (Computing)</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Math Logic Footer -->
+            <div class="bg-indigo-50 rounded-xl p-4 border border-indigo-100">
+                <h4 class="text-sm font-bold text-indigo-800 mb-2"><i class="fas fa-square-root-variable mr-2"></i>Recurrence Relation</h4>
+                <div class="bg-white p-3 rounded-lg shadow-inner text-center font-mono text-xs sm:text-sm text-gray-700 overflow-x-auto">
+                    Cost(r, c) = Traffic(r, c) + min( Cost(r-1, c), Cost(r, c-1) )
+                </div>
+                <p class="text-xs text-indigo-600 mt-2 text-center">
+                    This formula ensures that every cell contains the cumulative history of the best possible path to reach it.
+                </p>
+            </div>
+            
+             <div id="algo-explanation" class="text-sm text-gray-600 italic bg-gray-50 p-4 rounded-lg">
+                <p>Run a simulation to see the step-by-step logic here.</p>
+            </div>
+
+        </div>
+    </main>
+
+    <script>
+        (function() {
+            // --- Configuration ---
+            const SIZE = 5;
+            let TRAFFIC_GRID = [];
+            let isRunning = false;
+            
+            // UI IDs
+            const GRID_IDS = { greedy: 'greedy-grid', dp: 'dp-grid' };
+            const SCORE_IDS = { greedy: 'total-score-greedy', dp: 'total-score-dp' };
+            const OPS_IDS = { greedy: 'ops-greedy', dp: 'ops-dp' };
+            const DRONE_CLASSES = { greedy: 'drone-greedy', dp: 'drone-dp' };
+            const PATH_CLASSES = { greedy: 'path-greedy', dp: 'path-dp' };
+
+            /**
+             * Generates a random traffic grid with controlled difficulty.
+             */
+            window.generateRandomGrid = function() {
+                TRAFFIC_GRID = [];
+                for (let r = 0; r < SIZE; r++) {
+                    let row = [];
+                    for (let c = 0; c < SIZE; c++) {
+                        let val = Math.floor(Math.random() * 15) + 1;
+                        if (Math.random() < 0.15) { 
+                            val = Math.floor(Math.random() * 30) + 10; 
+                        }
+                        row.push(val);
+                    }
+                    TRAFFIC_GRID.push(row);
+                }
+                TRAFFIC_GRID[0][0] = Math.floor(Math.random() * 5) + 1; 
+                TRAFFIC_GRID[SIZE - 1][SIZE - 1] = 0; 
+                console.log("New Random Grid Generated:", TRAFFIC_GRID);
+            };
+
+            // Init the grid on load
+            window.generateRandomGrid(); 
+
+            // --- UI Helper Functions ---
+            
+            function updateDashboard(state) {
+                const defaultView = document.getElementById('analysis-default');
+                const contentView = document.getElementById('analysis-content');
+                
+                if (!state) {
+                    defaultView.classList.remove('hidden');
+                    contentView.classList.add('hidden');
+                    return;
+                }
+
+                defaultView.classList.add('hidden');
+                contentView.classList.remove('hidden');
+                
+                // Update Fields
+                const algoEl = document.getElementById('analysis-algo');
+                algoEl.textContent = state.algo;
+                algoEl.className = `font-bold text-lg ${state.color === 'red' ? 'text-red-400' : 'text-blue-400'}`;
+                
+                document.getElementById('analysis-phase').textContent = state.phase;
+                document.getElementById('analysis-focus').textContent = state.focus;
+                document.getElementById('analysis-action').textContent = state.action;
+                
+                const mathContainer = document.getElementById('analysis-math-container');
+                mathContainer.className = `bg-gray-800 p-2 rounded mt-2 border-l-4 ${state.color === 'red' ? 'border-red-500' : 'border-blue-500'}`;
+                document.getElementById('analysis-math').textContent = state.math;
+            }
+
+            function updateExplanation(html) {
+                document.getElementById('algo-explanation').innerHTML = html;
+            }
+            
+            function updateOps(id, count) {
+                document.getElementById(OPS_IDS[id]).textContent = count;
+            }
+
+            function getTrafficColor(val) {
+                if (val === 0) return 'bg-gray-800 text-white'; 
+                if (val <= 5) return 'traffic-low';
+                if (val <= 15) return 'traffic-med';
+                if (val <= 25) return 'traffic-high';
+                return 'traffic-jam'; 
+            }
+
+            /**
+             * Renders the common TRAFFIC_GRID into a specific container.
+             */
+            function renderGrid(containerId) {
+                const container = document.getElementById(containerId);
+                container.innerHTML = '';
+                
+                for (let r = 0; r < SIZE; r++) {
+                    for (let c = 0; c < SIZE; c++) {
+                        const val = TRAFFIC_GRID[r][c];
+                        const cell = document.createElement('div');
+                        cell.id = `cell-${containerId}-${r}-${c}`; 
+                        cell.className = `cell ${getTrafficColor(val)}`;
+                        
+                        if (r === 0 && c === 0) {
+                            cell.classList.add('bg-white', 'text-blue-500', 'border-blue-500'); 
+                            cell.style.borderColor = '#3b82f6';
+                            const icon = document.createElement('i');
+                            icon.className = 'fas fa-location-dot mb-1';
+                            cell.appendChild(icon);
+                        } 
+                        
+                        const valSpan = document.createElement('span');
+                        valSpan.textContent = val;
+                        cell.appendChild(valSpan);
+
+                        const subSpan = document.createElement('span');
+                        subSpan.id = `sub-${containerId}-${r}-${c}`;
+                        subSpan.className = 'cell-sub'; 
+                        cell.appendChild(subSpan);
+
+                        if (r === SIZE-1 && c === SIZE-1) {
+                            const icon = document.createElement('i');
+                            icon.className = 'fas fa-flag-checkered mt-1';
+                            cell.appendChild(icon);
+                        }
+
+                        container.appendChild(cell);
+                    }
+                }
+            }
+
+            function highlightCell(gridId, r, c, type) {
+                const containerName = GRID_IDS[gridId];
+                const cell = document.getElementById(`cell-${containerName}-${r}-${c}`);
+                if (!cell) return;
+                
+                // Clear state conflicts
+                cell.classList.remove(DRONE_CLASSES.greedy, DRONE_CLASSES.dp, PATH_CLASSES.greedy, PATH_CLASSES.dp, 'scanning', 'dependency', 'comparing'); 
+
+                if (type.startsWith('drone')) cell.classList.add(DRONE_CLASSES[gridId]);
+                if (type.startsWith('path')) cell.classList.add(PATH_CLASSES[gridId]);
+                if (type === 'scan') cell.classList.add('scanning');
+                if (type === 'dependency') cell.classList.add('dependency');
+                if (type === 'comparing') cell.classList.add('comparing');
+            }
+
+            function clearHighlights(gridId) {
+                const grids = gridId === 'all' ? [GRID_IDS.greedy, GRID_IDS.dp] : [GRID_IDS[gridId]];
+                
+                grids.forEach(containerName => {
+                    const cells = document.querySelectorAll(`#${containerName} .cell`);
+                    cells.forEach(c => {
+                        c.className = c.className.replace(/ (path-greedy|path-dp|drone-greedy|drone-dp|scanning|dependency|comparing)/g, '');
+                    });
+                });
+            }
+
+            const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+            // --- ALGORITHMS ---
+
+            async function runGreedy(gridId) {
+                const totalScoreId = SCORE_IDS[gridId];
+                let opsCount = 0;
+                
+                let r = 0, c = 0;
+                let total = 0;
+                
+                highlightCell(gridId, 0, 0, 'drone-greedy');
+                total += TRAFFIC_GRID[0][0]; 
+                document.getElementById(totalScoreId).innerText = total;
+                
+                updateDashboard({
+                    algo: 'Greedy Agent',
+                    phase: 'Traversal',
+                    focus: 'Cell [0,0]',
+                    action: 'Initialization',
+                    math: `Start Cost: ${TRAFFIC_GRID[0][0]}`,
+                    color: 'red'
+                });
+                
+                await sleep(500);
+                if (!isRunning) return;
+
+                while (r < SIZE - 1 || c < SIZE - 1) {
+                    let valRight = Infinity;
+                    let valDown = Infinity;
+                    
+                    // 1. Identify Neighbors
+                    if (c + 1 < SIZE) valRight = TRAFFIC_GRID[r][c+1];
+                    if (r + 1 < SIZE) valDown = TRAFFIC_GRID[r+1][c];
+                    
+                    // 2. Highlight Candidate Cells
+                    if (c + 1 < SIZE) highlightCell(gridId, r, c+1, 'comparing');
+                    if (r + 1 < SIZE) highlightCell(gridId, r+1, c, 'comparing');
+
+                    // Increment Ops (Comparison is an op)
+                    opsCount++;
+                    updateOps(gridId, opsCount);
+
+                    updateDashboard({
+                        algo: 'Greedy Agent',
+                        phase: 'Traversal',
+                        focus: `Cell [${r}, ${c}]`,
+                        action: 'Comparing Neighbors',
+                        math: `Right(${valRight === Infinity ? 'X' : valRight}) vs Down(${valDown === Infinity ? 'X' : valDown})`,
+                        color: 'red'
+                    });
+                    
+                    // Pause to show comparison
+                    await sleep(600);
+                    if (!isRunning) return;
+
+                    // 3. Mark current as visited path
+                    const cell = document.getElementById(`cell-${GRID_IDS[gridId]}-${r}-${c}`);
+                    if (cell) cell.classList.remove(DRONE_CLASSES.greedy);
+                    highlightCell(gridId, r, c, 'path-greedy'); 
+
+                    let nextR = r;
+                    let nextC = c;
+
+                    if (valRight === Infinity && valDown === Infinity) {
+                        break; 
+                    } else if (valRight <= valDown) {
+                        nextC++;
+                        total += valRight;
+                    } else {
+                        nextR++;
+                        total += valDown;
+                    }
+                    
+                    // Clear comparisons
+                    if (c + 1 < SIZE) document.getElementById(`cell-${GRID_IDS[gridId]}-${r}-${c+1}`).classList.remove('comparing');
+                    if (r + 1 < SIZE) document.getElementById(`cell-${GRID_IDS[gridId]}-${r+1}-${c}`).classList.remove('comparing');
+                    
+                    //move agent
+                    r = nextR;
+                    c = nextC;
+
+                    document.getElementById(totalScoreId).innerText = total;
+                    highlightCell(gridId, r, c, 'drone-greedy');
+                    
+                    await sleep(300);
+                    if (!isRunning) return;
+                }
+                
+                updateDashboard({
+                    algo: 'Greedy Agent',
+                    phase: 'Complete',
+                    focus: 'End [4,4]',
+                    action: 'Finished',
+                    math: `Total Local Cost: ${total}`,
+                    color: 'red'
+                });
+                
+                return total;
+            }
+
+            async function runDP(gridId) {
+                const containerName = GRID_IDS[gridId];
+                const totalScoreId = SCORE_IDS[gridId];
+                let opsCount = 0;
+                
+                // 1. PHASE 1: TABULATION
+                let dp = Array(SIZE).fill().map(() => Array(SIZE).fill(0));
+                
+                updateExplanation(`
+                    <strong class="text-blue-600">Phase 1: Tabulation</strong><br>
+                    Calculating minimal cumulative cost to reach every cell.
+                `);
+
+                for (let r = 0; r < SIZE; r++) {
+                    for (let c = 0; c < SIZE; c++) {
+                        if (!isRunning) return;
+                        
+                        opsCount++;
+                        updateOps(gridId, opsCount);
+
+                        highlightCell(gridId, r, c, 'scan');
+                        
+                        let currentTraffic = TRAFFIC_GRID[r][c];
+                        let minPrevCost = Infinity;
+                        
+                        // Highlight sources
+                        if (r > 0) highlightCell(gridId, r-1, c, 'dependency'); 
+                        if (c > 0) highlightCell(gridId, r, c-1, 'dependency'); 
+                        
+                        let topVal = (r > 0) ? dp[r-1][c] : 'Inf';
+                        let leftVal = (c > 0) ? dp[r][c-1] : 'Inf';
+                        let mathStr = "";
+                        
+                        if (r === 0 && c === 0) {
+                            mathStr = `Start: ${currentTraffic}`;
+                        } else {
+                            mathStr = `${currentTraffic} + min(Top:${topVal}, Left:${leftVal})`;
+                        }
+
+                        updateDashboard({
+                            algo: 'DP Agent',
+                            phase: 'Tabulation',
+                            focus: `Cell [${r}, ${c}]`,
+                            action: 'Computing Cumulative Cost',
+                            math: mathStr,
+                            color: 'blue'
+                        });
+                        
+                        await sleep(150); 
+                        
+                        // recurrence relation
+                        if (r === 0 && c === 0) {      //base case
+                            dp[r][c] = currentTraffic;
+                        } else {
+                            let fromTop = (r > 0) ? dp[r-1][c] : Infinity;
+                            let fromLeft = (c > 0) ? dp[r][c-1] : Infinity;
+                            minPrevCost = Math.min(fromTop, fromLeft);
+                            dp[r][c] = currentTraffic + minPrevCost;
+                        }
+                        
+                        // Make cumulative cost visible
+                        const subEl = document.getElementById(`sub-${containerName}-${r}-${c}`);
+                        if (subEl) {
+                            subEl.textContent = `Tot: ${dp[r][c]}`;
+                            subEl.classList.add('show');
+                        }
+
+                        // Remove highlights
+                        if (r > 0) document.getElementById(`cell-${containerName}-${r-1}-${c}`).classList.remove('dependency');
+                        if (c > 0) document.getElementById(`cell-${containerName}-${r}-${c-1}`).classList.remove('dependency');
+                        const cell = document.getElementById(`cell-${containerName}-${r}-${c}`);
+                        if (cell) cell.classList.remove('scanning');
+                        
+                        if (!isRunning) return;
+                    }
+                }
+                
+                await sleep(800);
+                if (!isRunning) return;
+
+                // 2. PHASE 2: BACKTRACKING
+                let total = dp[SIZE - 1][SIZE - 1];
+                document.getElementById(totalScoreId).innerText = total;
+                
+                updateExplanation(`
+                    <strong class="text-blue-600">Phase 2: Backtracking</strong><br>
+                    Tracing the path backwards from End to Start by choosing the neighbor with the lowest total cost.
+                `);
+                
+                // Note: We do NOT clear all highlights here so the totals remain visible.
+                // Just clear any lingering 'scanning' states.
+                document.querySelectorAll(`#${containerName} .scanning`).forEach(el => el.classList.remove('scanning'));
+
+                // start from bottom-right
+                let pathStack = [];
+                let currR = SIZE - 1;
+                let currC = SIZE - 1;
+                
+                while(currR > 0 || currC > 0) {
+                    pathStack.push({r: currR, c: currC});
+                    
+                    // Mark current position
+                    highlightCell(gridId, currR, currC, 'drone-dp');
+                    
+                    let valTop = (currR > 0) ? dp[currR-1][currC] : Infinity;
+                    let valLeft = (currC > 0) ? dp[currR][currC-1] : Infinity; 
+
+                    // Highlight candidates for predecessor
+                    if (currR > 0) highlightCell(gridId, currR-1, currC, 'comparing');
+                    if (currC > 0) highlightCell(gridId, currR, currC-1, 'comparing');
+
+                    updateDashboard({
+                        algo: 'DP Agent',
+                        phase: 'Backtracking',
+                        focus: `Cell [${currR}, ${currC}]`,
+                        action: 'Finding Predecessor',
+                        math: `Top(${valTop}) vs Left(${valLeft}) -> Pick Min`,
+                        color: 'blue'
+                    });
+                    
+                    await sleep(600);
+                    if (!isRunning) return;
+
+                    // Remove drone highlight from current before moving logic
+                    const cell = document.getElementById(`cell-${containerName}-${currR}-${currC}`);
+                    if(cell) cell.classList.remove(DRONE_CLASSES.dp);
+                    // Add to path visually immediately (optional, or wait for final animation)
+                    highlightCell(gridId, currR, currC, 'path-dp');
+
+                    // Clear comparisons
+                    if (currR > 0) document.getElementById(`cell-${containerName}-${currR-1}-${currC}`).classList.remove('comparing');
+                    if (currC > 0) document.getElementById(`cell-${containerName}-${currR}-${currC-1}`).classList.remove('comparing');
+
+                    // Move to Min
+                    if(valTop <= valLeft) currR--;
+                    else currC--;
+                }
+                pathStack.push({r: 0, c: 0}); // add start cell
+                
+        
+                updateExplanation(`<strong>Path Found!</strong> Visualizing full route.`);
+                
+                pathStack.reverse(); //flip to start->end order to show path at end of visualizationa
+                // Reset Grid visuals to show the clear path
+                clearHighlights(gridId);
+                
+                for(let i=0; i<pathStack.length; i++) {
+                    if (!isRunning) return;
+                    let pos = pathStack[i];
+                    highlightCell(gridId, pos.r, pos.c, 'drone-dp');
+                    await sleep(150);
+                    const cell = document.getElementById(`cell-${containerName}-${pos.r}-${pos.c}`);
+                    if (cell) cell.classList.remove(DRONE_CLASSES.dp);
+                    highlightCell(gridId, pos.r, pos.c, 'path-dp');
+                }
+                
+                updateDashboard({
+                    algo: 'DP Agent',
+                    phase: 'Complete',
+                    focus: 'End [4,4]',
+                    action: 'Optimal Path Found',
+                    math: `Global Min Cost: ${total}`,
+                    color: 'blue'
+                });
+
+                return total;
+            }
+
+            window.runComparison = async function() {
+                if(isRunning) return;
+                isRunning = true;
+                window.resetSim('all');
+                isRunning = true; 
+                
+                document.getElementById('btn-compare').disabled = true;
+                document.getElementById('btn-randomize').disabled = true;
+                
+                updateExplanation(`
+                    <strong class="text-red-600">Greedy Agent:</strong><br>
+                    Running fast local optimization. Compares neighbors and picks the cheapest one immediately.
+                `);
+                const greedyTime = await runGreedy('greedy');
+                if (!isRunning) return;
+                
+                await sleep(1000); 
+                
+                updateExplanation(`
+                    <strong class="text-blue-600">DP Agent:</strong><br>
+                    Running global optimization (Tabulation). Calculates cost for EVERY cell first.
+                `);
+                const dpTime = await runDP('dp');
+
+                if (isRunning) {
+                    let diff = greedyTime - dpTime;
+                    
+                    updateDashboard({
+                        algo: 'Comparison Result',
+                        phase: 'Analysis Complete',
+                        focus: 'Summary',
+                        action: diff > 0 ? 'DP Optimization' : 'Equal Performance',
+                        math: diff > 0 ? `DP saved ${diff} cost units` : 'Both found optimal path',
+                        color: diff > 0 ? 'blue' : 'green'
+                    });
+                    
+                    updateExplanation(`
+                        <strong class="text-green-600">Result:</strong><br>
+                        Greedy: ${greedyTime} | DP: ${dpTime}<br>
+                        ${diff > 0 ? 'DP proved superior via Global Optimization.' : 'Greedy luckily found the optimal path.'}
+                    `);
+                }
+
+                isRunning = false;
+                document.getElementById('btn-compare').disabled = false;
+                document.getElementById('btn-randomize').disabled = false;
+            };
+
+            window.resetSim = function(gridId = 'all') {
+                isRunning = false;
+                const grids = gridId === 'all' ? ['greedy', 'dp'] : [gridId];
+                grids.forEach(id => {
+                    document.getElementById(SCORE_IDS[id]).innerText = '0';
+                    document.getElementById(OPS_IDS[id]).innerText = '0'; 
+                    clearHighlights(id);
+                    document.querySelectorAll(`#${GRID_IDS[id]} .cell-sub`).forEach(s => s.classList.remove('show'));
+                    renderGrid(GRID_IDS[id]);
+                });
+                if (gridId === 'all') {
+                    updateDashboard(null); 
+                    document.getElementById('algo-explanation').innerHTML = '<p class="italic">Run a simulation to see the logic.</p>';
+                }
+            };
+
+            window.resetSim('all');
+        })();
+    </script>
+</body>
+</html>
